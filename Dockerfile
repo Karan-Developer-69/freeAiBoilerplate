@@ -5,8 +5,12 @@ WORKDIR /app
 # Python और pip install
 RUN apt-get update && apt-get install -y python3 python3-pip
 
-# Packages install with break-system-packages (Docker safe)
+# Packages install (--break-system-packages safe in Docker)
 RUN python3 -m pip install --no-cache-dir fastapi uvicorn requests --break-system-packages
+
+# entrypoint script copy और executable बना लो
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # App copy
 COPY app.py /app/app.py
@@ -14,5 +18,5 @@ COPY app.py /app/app.py
 EXPOSE 8000
 EXPOSE 11434
 
-# Ollama + FastAPI run
-CMD ollama serve & uvicorn app:app --host 0.0.0.0 --port 8000
+# entrypoint set करो
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
