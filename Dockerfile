@@ -1,32 +1,18 @@
-FROM python:3.9
+FROM ollama/ollama:latest
 
-# HF required user setup
-RUN useradd -m -u 1000 user
+# Model pull (build समय पर download हो जाएगा, छोटा model चुनो)
+RUN ollama pull phi3:mini   # या gemma2:2b, llama3.2:3b (3B तक ok free CPU पर)
 
-USER user
+# FastAPI dependencies
+RUN apt-get update && apt-get install -y python3-pip
+RUN pip3 install fastapi uvicorn requests
 
-ENV HOME=/home/user \
-    PATH=/home/user/.local/bin:$PATH
+# App copy
+COPY app.py /app.py
 
-WORKDIR $HOME/app
+# Expose ports (Ollama 11434 + FastAPI 8000)
+EXPOSE 11434
+EXPOSE 8000
 
-# Copy requirements (बिना torch वाले)
-COPY --chown=user requirements.txt .
-
-# Pip upgrade
-RUN pip install --no-cache-dir --upgrade pip
-
-# Normal packages install (PyPI से fastapi आदि)
-RUN pip install --no-cache-dir -r requirements.txt
-
-# PyTorch CPU-only अलग install (custom index से)
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio
-
-# App code copy
-COPY --chown=user . .
-
-# Port
-EXPOSE 7860
-
-# Run
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]
+# Ollama server background में + FastAPI foreground में
+CMD ollama serve & uvicorn app.py:app --host 0.0.0.0 --port 8000
