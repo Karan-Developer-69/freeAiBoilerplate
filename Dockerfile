@@ -17,8 +17,8 @@ RUN pip install --no-cache-dir fastapi uvicorn requests
 COPY app.py /app/app.py
 
 # Ports expose
-EXPOSE 8000    # FastAPI के लिए
-EXPOSE 11434   # Ollama direct (optional)
+EXPOSE 8000    
+EXPOSE 11434   
 
 # Runtime: Ollama server background + FastAPI foreground
 CMD ollama serve & uvicorn app:app --host 0.0.0.0 --port 8000
