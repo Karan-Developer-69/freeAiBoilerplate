@@ -3,14 +3,14 @@
 # 1. Ollama server start karein
 ollama serve &
 
-# 2. Wait karein start hone ka
+# 2. Wait karein
 echo "Waiting for Ollama server to start..."
 sleep 5
 
-# 3. Best Coding Model Pull karein
-# Note: 7b model thoda heavy hai, agar slow lage to 'qwen2.5-coder:1.5b' use karein
-echo "Pulling Qwen 2.5 Coder model..."
-ollama pull deepseek-coder
+# 3. DeepSeek Coder V2 Pull karein
+# Note: Ye model bada hai, download hone me time lega.
+echo "Pulling DeepSeek Coder V2..."
+ollama pull deepseek-coder-v2
 
 # 4. FastAPI start karein
 echo "Starting FastAPI..."
