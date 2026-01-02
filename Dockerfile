@@ -25,6 +25,6 @@ COPY --chown=user . .
 # 7. Start Script Permission
 RUN chmod +x entrypoint.sh
 
-# 8. Ports and Start
+# 8. Ports
 EXPOSE 7860
 CMD ["./entrypoint.sh"]
