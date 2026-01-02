@@ -28,11 +28,18 @@ init_db()
 API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
-# Database se Key check karne ka function
+# Ye wo key hai jo aapne HF Secrets mein set ki thi (Backup ke liye)
+MASTER_KEY = 'lysis69'
+
 async def verify_api_key(api_key: str = Security(api_key_header)):
     if not api_key:
         raise HTTPException(status_code=403, detail="API Key is missing")
     
+    # 1. Pehle check karo ki kya ye Master Key hai? (Admin Access)
+    if MASTER_KEY and api_key == MASTER_KEY:
+        return True
+
+    # 2. Agar Master Key nahi hai, to Database check karo (User Access)
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT username FROM keys WHERE api_key=?", (api_key,))
@@ -40,10 +47,12 @@ async def verify_api_key(api_key: str = Security(api_key_header)):
     conn.close()
     
     if result:
-        return True # Key mil gayi, User valid hai
+        return True # Key mil gayi
     else:
-        raise HTTPException(status_code=403, detail="Invalid API Key")
-
+        # Debugging ke liye Logs mein print karein
+        print(f"Failed Login Attempt with Key: {api_key}") 
+        raise HTTPException(status_code=403, detail="Invalid API Key: Key not found in DB")
+        
 # --- DATA MODELS ---
 class KeyGenerationRequest(BaseModel):
     username: str
