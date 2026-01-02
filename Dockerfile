@@ -1,22 +1,30 @@
 FROM python:3.9
 
-# Hugging Face Spaces के लिए user setup (must)
+# Hugging Face required user setup
 RUN useradd -m -u 1000 user
-USER user
-ENV HOME=/home/user
-ENV PATH="\( {HOME}/.local/bin: \){PATH}"
-WORKDIR ${HOME}/app
 
-# Requirements copy और install
+# Switch to user
+USER user
+
+# Set home and PATH (important – pip user install के लिए)
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH
+
+# Working directory
+WORKDIR $HOME/app
+
+# Copy requirements
 COPY --chown=user requirements.txt .
-RUN pip install --upgrade pip  # पहले pip upgrade (important fix)
+
+# Upgrade pip and install dependencies (user के बाद, PATH set के बाद)
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# App code copy
+# Copy app code
 COPY --chown=user . .
 
-# Port expose (FastAPI के लिए 7860 common है, या 8000)
+# Expose port
 EXPOSE 7860
 
-# Run
+# Run FastAPI
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]
