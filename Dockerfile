@@ -1,20 +1,28 @@
-FROM ollama/ollama:latest
+FROM python:3.11
 
-WORKDIR /app
+# User create karein (Hugging Face security requirement)
+RUN useradd -m -u 1000 user
+USER user
+ENV PATH="/home/user/.local/bin:$PATH"
+ENV HOME=/home/user
 
-# Python और pip install
-RUN apt-get update && apt-get install -y python3 python3-pip
+WORKDIR $HOME/app
 
-# FastAPI dependencies
-RUN python3 -m pip install --no-cache-dir fastapi uvicorn requests --break-system-packages
+# Ollama install karein
+RUN curl -fsSL https://ollama.com/install.sh | sh
 
-# entrypoint copy और executable
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Python requirements copy aur install karein
+COPY --chown=user requirements.txt requirements.txt
+RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
-# App copy
-COPY app.py /app/app.py
+# Baaki files copy karein
+COPY --chown=user . .
 
-EXPOSE 8000
+# Script ko executable banayein
+RUN chmod +x entrypoint.sh
 
-ENTRYPOINT ["/entrypoint.sh"]
+# Port expose karein (Hugging Face 7860 use karta hai)
+EXPOSE 7860
+
+# Entrypoint script chalayein
+CMD ["./entrypoint.sh"]
