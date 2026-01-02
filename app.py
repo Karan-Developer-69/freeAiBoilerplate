@@ -1,45 +1,60 @@
 import torch
-from diffusers import FluxPipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from fastapi import FastAPI
 from pydantic import BaseModel
-from PIL import Image
-import io
-import base64
 from fastapi.responses import StreamingResponse
+import io
 
-app = FastAPI(title="FLUX.1 Schnell Image Generator")
+app = FastAPI(title="Phi-3 Mini Text Generator API")
 
-# Model load (पहली request पर load होगा, थोड़ा time लगेगा)
-pipe = FluxPipeline.from_pretrained(
-    "black-forest-labs/FLUX.1-schnell",
-    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32
+# Model load (CPU पर, bfloat16 अगर support हो वरना float32)
+model_id = "microsoft/Phi-3-mini-4k-instruct"
+
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+model = AutoModelForCausalLM.from_pretrained(
+    model_id,
+    torch_dtype=torch.float32,  # CPU के लिए float32 safe (bfloat16 अगर error दे तो)
+    device_map="cpu",           # Force CPU
+    trust_remote_code=True      # Phi-3 के लिए जरूरी
 )
-pipe.enable_model_cpu_offload()  # Memory save के लिए
 
-class ImageRequest(BaseModel):
+# Text generation pipeline
+generator = pipeline(
+    "text-generation",
+    model=model,
+    tokenizer=tokenizer,
+    device_map="cpu"
+)
+
+class ChatRequest(BaseModel):
     prompt: str
-    num_inference_steps: int = 4  # Schnell के लिए low steps fast
-    height: int = 1024
-    width: int = 1024
-    guidance_scale: float = 3.5
+    max_new_tokens: int = 512
+    temperature: float = 0.7
+    top_p: float = 0.9
 
 @app.get("/")
 def root():
-    return {"message": "FLUX Image Generator API चल रहा है! /docs पर Swagger UI देखो।"}
+    return {"message": "Phi-3 Mini Text API चल रहा है! /docs पर Swagger UI देखो। POST /chat पर prompt भेजो।"}
 
-@app.post("/generate")
-async def generate_image(request: ImageRequest):
-    image = pipe(
-        prompt=request.prompt,
-        num_inference_steps=request.num_inference_steps,
-        height=request.height,
-        width=request.width,
-        guidance_scale=request.guidance_scale,
-    ).images[0]
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    outputs = generator(
+        request.prompt,
+        max_new_tokens=request.max_new_tokens,
+        temperature=request.temperature,
+        top_p=request.top_p,
+        do_sample=True,
+        return_full_text=False
+    )
 
-    # Image को bytes में convert (base64 या direct bytes)
-    buf = io.BytesIO()
-    image.save(buf, format="PNG")
-    buf.seek(0)
+    response_text = outputs[0]["generated_text"]
 
-    return StreamingResponse(buf, media_type="image/png")
+    # Streaming अगर चाहो (real-time words), नहीं तो direct text
+    def stream_response():
+        for token in response_text:
+            yield token
+
+    return StreamingResponse(stream_response(), media_type="text/plain")
+    
+    # या simple text return: return {"response": response_text}
