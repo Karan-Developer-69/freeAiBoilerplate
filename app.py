@@ -1,39 +1,35 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-from transformers import pipeline
-import torch
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
+import requests
+import json
 
-app = FastAPI(title="Gemma-2-2B Text Chat API")
+app = FastAPI(title="Ollama Phi-3 Mini API")
 
-# छोटा model, CPU पर perfect (low memory ~4-5GB)
-generator = pipeline(
-    "text-generation",
-    model="google/gemma-2-2b-it",
-    torch_dtype=torch.float32,
-    device_map="cpu"
-)
-
-class ChatRequest(BaseModel):
-    prompt: str
-    max_new_tokens: int = 256
-    temperature: float = 0.7
+OLLAMA_URL = "http://localhost:11434/api/chat"
 
 @app.get("/")
 def root():
-    return {"message": "Gemma-2-2B API चल रहा है! /docs पर test करो।"}
+    return {"message": "Ollama API चल रहा है! /chat POST करो।"}
 
 @app.post("/chat")
-def chat(request: ChatRequest):
-    # Gemma chat format (simple prompt)
-    full_prompt = f"<start_of_turn>user\n{request.prompt}<end_of_turn>\n<start_of_turn>model\n"
+async def chat(request: Request):
+    body = await request.json()
+    body["model"] = "phi3:mini"  # अपना model
 
-    outputs = generator(
-        full_prompt,
-        max_new_tokens=request.max_new_tokens,
-        temperature=request.temperature,
-        do_sample=True,
-        return_full_text=False
-    )
+    resp = requests.post(OLLAMA_URL, json=body, stream=True)
+    resp.raise_for_status()
 
-    response = outputs[0]["generated_text"]
-    return {"response": response}
+    def generate():
+        for chunk in resp.iter_lines():
+            if chunk:
+                yield chunk + b"\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+# Simple test endpoint
+@app.post("/generate")
+async def generate(request: Request):
+    body = await request.json()
+    body["model"] = "phi3:mini"
+    resp = requests.post("http://localhost:11434/api/generate", json=body, stream=True)
+    return StreamingResponse(resp.iter_content(), media_type="application/x-ndjson")
