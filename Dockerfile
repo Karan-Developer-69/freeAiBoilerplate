@@ -6,9 +6,9 @@ FROM ollama/ollama:latest
 WORKDIR /app
 
 # Model build time पर pull करो (server background में start करके)
-RUN ollama serve & \
-    sleep 15 && \
-    ollama pull gemma2:2b    # छोटा और fastest model (2B) – phi3:mini की जगह ये रखो ताकि free CPU पर super fast चले
+RUN ollama pull gemma2:2b & \
+    ollama serve
+        # छोटा और fastest model (2B) – phi3:mini की जगह ये रखो ताकि free CPU पर super fast चले
 
 # Python packages install (Ollama image में Python पहले से होता है)
 RUN pip install --no-cache-dir fastapi uvicorn requests
