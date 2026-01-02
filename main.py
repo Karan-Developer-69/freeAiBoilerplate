@@ -1,32 +1,38 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import ollama
+import json
 
 app = FastAPI()
 
 class QueryRequest(BaseModel):
     prompt: str
-    # Default model ab coding expert wala set kar diya hai
-    model: str = "deepseek-coder"
+    model: str = "deepseek-coder-v2"
 
 @app.get("/")
 def home():
-    return {"message": "Coding Expert AI is Live!"}
+    return {"message": "DeepSeek Coder V2 (Streaming) is Live!"}
 
 @app.post("/generate")
 def generate_text(request: QueryRequest):
-    try:
-        # System prompt add kiya hai taaki wo ache se code likhe
-        response = ollama.chat(model=request.model, messages=[
-          {
-            'role': 'system',
-            'content': 'You are an expert coding assistant. Write clean, efficient, and well-commented code.'
-          },
-          {
-            'role': 'user',
-            'content': request.prompt,
-          },
-        ])
-        return {"response": response['message']['content']}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    # Generator function jo data tukdon (chunks) me bhejega
+    def stream_generator():
+        try:
+            stream = ollama.chat(
+                model=request.model,
+                messages=[{'role': 'user', 'content': request.prompt}],
+                stream=True,  # Yahan streaming ON ki hai
+            )
+            
+            for chunk in stream:
+                # Sirf content nikal kar client ko bhejo
+                content = chunk['message']['content']
+                if content:
+                    yield content
+
+        except Exception as e:
+            yield f"Error: {str(e)}"
+
+    # FastAPI ko StreamingResponse return karein
+    return StreamingResponse(stream_generator(), media_type="text/plain")
