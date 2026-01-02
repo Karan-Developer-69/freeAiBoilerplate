@@ -17,8 +17,8 @@ RUN pip install fastapi uvicorn requests --user
 COPY app.py /home/user/app.py
 
 # Ports expose (comments अलग line पर)
-EXPOSE 11434    # Ollama direct API (optional, लेकिन HF Spaces में proxy से काम करेगा)
-EXPOSE 8000     # FastAPI wrapper port
+EXPOSE 11434    
+EXPOSE 8000     
 
 # Runtime command
 CMD ollama serve & uvicorn app.py:app --host 0.0.0.0 --port 8000
