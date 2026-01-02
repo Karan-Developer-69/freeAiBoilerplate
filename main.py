@@ -16,12 +16,12 @@ MASTER_KEY = 'lysis69'
 
 async def verify_api_key(api_key: str = Security(api_key_header)):
     # 1. Agar Server par Key set nahi hai, toh error do (Security First)
-    if not MASTER_KEY:
-        raise HTTPException(status_code=500, detail="Server Error: API_KEY not set in Secrets")
+    # if not MASTER_KEY:
+    #     raise HTTPException(status_code=500, detail="Server Error: API_KEY not set in Secrets")
         
-    # 2. Agar Key match nahi karti
-    if api_key != MASTER_KEY:
-        raise HTTPException(status_code=403, detail="Unauthorized: Invalid Master Key")
+    # # 2. Agar Key match nahi karti
+    # if api_key != MASTER_KEY:
+    #     raise HTTPException(status_code=403, detail="Unauthorized: Invalid Master Key")
     
     return True
 
