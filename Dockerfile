@@ -1,33 +1,33 @@
 FROM python:3.11
 
-# 1. Root bankar Ollama install karein
+# 1. Install Ollama
 RUN curl -fsSL https://ollama.com/install.sh | sh
 
-# 2. User create karein
+# 2. User Setup
 RUN useradd -m -u 1000 user
-
-# 3. Environment Variables set karein
 ENV USER=user
 ENV PATH="/home/user/.local/bin:$PATH"
 ENV HOME=/home/user
-# Gemini API Key ko pass karne ke liye (Runtime pe secret se uthayega)
 ENV OLLAMA_KEEP_ALIVE=5m
 
-# 4. User switch
-USER user
+# 3. Workdir
 WORKDIR $HOME/app
 
-# 5. Libraries Install
+# 4. Folder Permissions (Important for SQLite DB)
+RUN chown -R user:user $HOME/app && chmod -R 777 $HOME/app
+
+# 5. Switch User
+USER user
+
+# 6. Install Python Libs
 RUN pip install --no-cache-dir fastapi uvicorn ollama
 
-# 6. Copy Files
+# 7. Copy Files
 COPY --chown=user . .
 
-# 7. Permissions
+# 8. Start Script Permission
 RUN chmod +x entrypoint.sh
 
-# 8. Expose Port
+# 9. Ports and Start
 EXPOSE 7860
-
-# 9. Start
 CMD ["./entrypoint.sh"]
