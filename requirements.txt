@@ -1,6 +1,3 @@
 fastapi
-uvicorn[standard]
-diffusers[torch]
-transformers
-accelerate
-pillow
+uvicorn
+ollama
