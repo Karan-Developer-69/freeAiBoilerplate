@@ -1,24 +1,24 @@
 FROM ollama/ollama:latest
 
-# HF Spaces के लिए user setup (जरूरी नहीं लेकिन safe)
+# HF Spaces के लिए user setup
 RUN useradd -m -u 1000 user
 USER user
 WORKDIR /home/user
 
-# पहले Ollama server background में start करो, फिर model pull
+# Ollama server start करके model pull करो
 RUN ollama serve & \
     sleep 10 && \
-    ollama pull phi3:mini
+    ollama pull phi3:mini   # यहाँ comment अलग line पर है, safe
 
-# FastAPI dependencies install
+# Python dependencies install
 RUN pip install fastapi uvicorn requests --user
 
 # App file copy
 COPY app.py /home/user/app.py
 
-# Ports expose
-EXPOSE 11434   # Ollama direct API (optional)
-EXPOSE 8000    # FastAPI wrapper
+# Ports expose (comments अलग line पर)
+EXPOSE 11434    # Ollama direct API (optional, लेकिन HF Spaces में proxy से काम करेगा)
+EXPOSE 8000     # FastAPI wrapper port
 
-# Final command: Ollama serve background + FastAPI foreground
+# Runtime command
 CMD ollama serve & uvicorn app.py:app --host 0.0.0.0 --port 8000
