@@ -12,7 +12,7 @@ API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 # Ye key Hugging Face Secrets se aayegi
-MASTER_KEY = os.environ.get("API_KEY")
+MASTER_KEY = 'lysis69'
 
 async def verify_api_key(api_key: str = Security(api_key_header)):
     # 1. Agar Server par Key set nahi hai, toh error do (Security First)
