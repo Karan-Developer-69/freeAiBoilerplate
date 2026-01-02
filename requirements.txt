@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu  # CPU के लिए, GPU हो तो cuda version
+diffusers[torch]
+transformers
+accelerate
+pillow
