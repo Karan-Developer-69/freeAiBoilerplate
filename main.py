@@ -6,17 +6,22 @@ app = FastAPI()
 
 class QueryRequest(BaseModel):
     prompt: str
-    model: str = "tinyllama"  # Default model
+    # Default model ab coding expert wala set kar diya hai
+    model: str = "deepseek-coder"
 
 @app.get("/")
 def home():
-    return {"message": "Ollama API is running on Hugging Face Spaces!"}
+    return {"message": "Coding Expert AI is Live!"}
 
 @app.post("/generate")
 def generate_text(request: QueryRequest):
     try:
-        # Ollama library ka use karke response generate karein
+        # System prompt add kiya hai taaki wo ache se code likhe
         response = ollama.chat(model=request.model, messages=[
+          {
+            'role': 'system',
+            'content': 'You are an expert coding assistant. Write clean, efficient, and well-commented code.'
+          },
           {
             'role': 'user',
             'content': request.prompt,
@@ -25,5 +30,3 @@ def generate_text(request: QueryRequest):
         return {"response": response['message']['content']}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-# Note: App run command entrypoint.sh mein hoga
