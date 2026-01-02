@@ -1,18 +1,24 @@
 FROM ollama/ollama:latest
 
-# Model pull (build समय पर download हो जाएगा, छोटा model चुनो)
-RUN ollama pull phi3:mini   # या gemma2:2b, llama3.2:3b (3B तक ok free CPU पर)
+# HF Spaces के लिए user setup (जरूरी नहीं लेकिन safe)
+RUN useradd -m -u 1000 user
+USER user
+WORKDIR /home/user
 
-# FastAPI dependencies
-RUN apt-get update && apt-get install -y python3-pip
-RUN pip3 install fastapi uvicorn requests
+# पहले Ollama server background में start करो, फिर model pull
+RUN ollama serve & \
+    sleep 10 && \
+    ollama pull phi3:mini
 
-# App copy
-COPY app.py /app.py
+# FastAPI dependencies install
+RUN pip install fastapi uvicorn requests --user
 
-# Expose ports (Ollama 11434 + FastAPI 8000)
-EXPOSE 11434
-EXPOSE 8000
+# App file copy
+COPY app.py /home/user/app.py
 
-# Ollama server background में + FastAPI foreground में
+# Ports expose
+EXPOSE 11434   # Ollama direct API (optional)
+EXPOSE 8000    # FastAPI wrapper
+
+# Final command: Ollama serve background + FastAPI foreground
 CMD ollama serve & uvicorn app.py:app --host 0.0.0.0 --port 8000
