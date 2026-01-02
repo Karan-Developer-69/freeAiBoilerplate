@@ -1,17 +1,17 @@
 #!/bin/bash
 
-# 1. Ollama server start karein
-ollama serve &
+# 1. Ollama Server Start (Background mein)
+# Hum yahan API KEY pass kar rahe hain taaki Ollama Google se connect ho sake
+GEMINI_API_KEY=$GEMINI_API_KEY ollama serve &
 
-# 2. Wait karein
-echo "Waiting for Ollama server to start..."
+echo "Waiting for Ollama..."
 sleep 5
 
-# 3. DeepSeek Coder V2 Pull karein
-# Note: Ye model bada hai, download hone me time lega.
-echo "Pulling DeepSeek Coder V2..."
-ollama pull deepseek-coder-v2
+# 2. Gemini Model Pull Karein
+echo "Connecting to Gemini 3 Pro..."
+# Note: Ye bohot fast hoga kyunki ye cloud model hai
+ollama pull gemini-3-pro-preview
 
-# 4. FastAPI start karein
-echo "Starting FastAPI..."
-uvicorn main:app --host 0.0.0.0 --port 7860
+# 3. FastAPI Start
+echo "Starting API Server..."
+uvicorn main:app --host 0.0.0.0 --port 7860 --workers 4
