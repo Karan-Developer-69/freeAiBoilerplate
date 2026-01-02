@@ -1,32 +1,31 @@
 FROM python:3.11
 
-# 1. Sabse pehle ROOT bankar Ollama install karein (User create karne se pehle)
+# 1. Root bankar Ollama Binary install karein
 RUN curl -fsSL https://ollama.com/install.sh | sh
 
-# 2. Ab User create karein (Hugging Face security requirement)
+# 2. User create karein
 RUN useradd -m -u 1000 user
 
-# 3. Environment variables set karein
+# 3. Env variables set karein
 ENV USER=user
 ENV PATH="/home/user/.local/bin:$PATH"
 ENV HOME=/home/user
 
-# 4. Ab User par switch karein
+# 4. User switch karein
 USER user
 WORKDIR $HOME/app
 
-# 5. Python requirements copy aur install karein
-COPY --chown=user requirements.txt requirements.txt
-RUN pip install --no-cache-dir --upgrade -r requirements.txt
+# 5. Libraries Direct Install karein (requirements.txt ki zaroorat hata di hai taaki error fix ho jaye)
+RUN pip install --no-cache-dir fastapi uvicorn ollama
 
 # 6. Baaki files copy karein
 COPY --chown=user . .
 
-# 7. Script ko executable banayein
+# 7. Permissions set karein
 RUN chmod +x entrypoint.sh
 
-# 8. Port expose karein
+# 8. Port expose
 EXPOSE 7860
 
-# 9. Entrypoint script chalayein
+# 9. Start
 CMD ["./entrypoint.sh"]
