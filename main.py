@@ -1,62 +1,146 @@
 import os
-from fastapi import FastAPI, HTTPException, Security, Depends
+import sqlite3
+import uuid
+from fastapi import FastAPI, HTTPException, Security, Depends, Request
 from fastapi.security import APIKeyHeader
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 from ollama import AsyncClient
 
 app = FastAPI()
 
+# --- DATABASE SETUP (SQLite) ---
+DB_FILE = "apikeys.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    # Table banayein agar nahi hai
+    c.execute('''CREATE TABLE IF NOT EXISTS keys 
+                 (username TEXT, api_key TEXT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    conn.commit()
+    conn.close()
+
+# App start hone par DB initialize karein
+init_db()
+
 # --- SECURITY SETUP ---
 API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
-SERVER_API_KEY = os.environ.get("API_KEY") # HF Secret se lega
 
-async def get_api_key(api_key_header: str = Security(api_key_header)):
-    if not SERVER_API_KEY:
-        return True # Agar key set nahi hai to allow karo (Dev mode)
-    if api_key_header == SERVER_API_KEY:
-        return True
-    raise HTTPException(status_code=403, detail="Invalid API Key")
+# Database se Key check karne ka function
+async def verify_api_key(api_key: str = Security(api_key_header)):
+    if not api_key:
+        raise HTTPException(status_code=403, detail="API Key is missing")
+    
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT username FROM keys WHERE api_key=?", (api_key,))
+    result = c.fetchone()
+    conn.close()
+    
+    if result:
+        return True # Key mil gayi, User valid hai
+    else:
+        raise HTTPException(status_code=403, detail="Invalid API Key")
 
-# --- REQUEST MODEL ---
+# --- DATA MODELS ---
+class KeyGenerationRequest(BaseModel):
+    username: str
+
 class QueryRequest(BaseModel):
     prompt: str
-    # Default model updated to Gemini 3 Pro
     model: str = "gemini-3-pro-preview"
-    temperature: float = Field(0.7, ge=0.0, le=2.0)
-    max_tokens: int = Field(4096, description="Max response length")
+    temperature: float = 0.7
+    max_tokens: int = 4096
 
-@app.get("/")
-def home():
-    return {"message": "Gemini 3 Pro API is Live on Hugging Face!"}
+# --- HTML DASHBOARD (UI) ---
+@app.get("/", response_class=HTMLResponse)
+def dashboard():
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Get Your API Key</title>
+        <style>
+            body { font-family: sans-serif; background: #121212; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .card { background: #1e1e1e; padding: 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); text-align: center; width: 350px; }
+            input { width: 90%; padding: 10px; margin: 10px 0; border-radius: 5px; border: none; }
+            button { width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+            button:hover { background: #0056b3; }
+            .key-display { margin-top: 20px; word-break: break-all; color: #4CAF50; font-weight: bold; display: none; background: #2d2d2d; padding: 10px; border-radius: 5px; }
+            h2 { color: #007bff; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h2>🚀 Free AI API</h2>
+            <p>Enter your name to generate a free API Key.</p>
+            <input type="text" id="username" placeholder="Your Name" required>
+            <button onclick="generateKey()">Generate API Key</button>
+            <div id="result" class="key-display"></div>
+        </div>
 
-@app.post("/generate", dependencies=[Depends(get_api_key)])
+        <script>
+            async function generateKey() {
+                const name = document.getElementById('username').value;
+                if(!name) return alert("Please enter a name");
+                
+                const btn = document.querySelector('button');
+                btn.disabled = true;
+                btn.innerText = "Generating...";
+
+                const res = await fetch('/new-key', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username: name})
+                });
+
+                const data = await res.json();
+                const display = document.getElementById('result');
+                display.style.display = 'block';
+                display.innerText = data.api_key;
+                
+                btn.disabled = false;
+                btn.innerText = "Generate Another";
+            }
+        </script>
+    </body>
+    </html>
+    """
+
+# --- NEW KEY GENERATION ENDPOINT ---
+@app.post("/new-key")
+def create_key(req: KeyGenerationRequest):
+    new_key = f"sk-{uuid.uuid4()}" # Random Unique Key
+    
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT INTO keys (username, api_key) VALUES (?, ?)", (req.username, new_key))
+    conn.commit()
+    conn.close()
+    
+    return {"status": "success", "username": req.username, "api_key": new_key}
+
+# --- CHAT GENERATION (SECURED) ---
+@app.post("/generate", dependencies=[Depends(verify_api_key)])
 async def generate_text(request: QueryRequest):
     async def stream_generator():
         try:
             client = AsyncClient()
-            
-            # System prompt add kiya hai for better coding
             messages = [
-                {'role': 'system', 'content': 'You are an expert Coding Assistant. Write efficient, modern code.'},
+                {'role': 'system', 'content': 'You are a helpful coding assistant.'},
                 {'role': 'user', 'content': request.prompt}
             ]
-
             async for part in await client.chat(
                 model=request.model,
                 messages=messages,
                 stream=True,
-                options={
-                    'temperature': request.temperature,
-                    'num_predict': request.max_tokens,
-                }
+                options={'temperature': request.temperature, 'num_predict': request.max_tokens}
             ):
                 content = part['message']['content']
-                if content:
-                    yield content
-
+                if content: yield content
         except Exception as e:
-            yield f"\n[Error: {str(e)}]"
+            yield f"[Error: {str(e)}]"
 
     return StreamingResponse(stream_generator(), media_type="text/plain")
