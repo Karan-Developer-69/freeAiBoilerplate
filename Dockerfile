@@ -13,21 +13,18 @@ ENV OLLAMA_KEEP_ALIVE=5m
 # 3. Workdir
 WORKDIR $HOME/app
 
-# 4. Folder Permissions (Important for SQLite DB)
-RUN chown -R user:user $HOME/app && chmod -R 777 $HOME/app
-
-# 5. Switch User
+# 4. Switch User
 USER user
 
-# 6. Install Python Libs
+# 5. Install Python Libs
 RUN pip install --no-cache-dir fastapi uvicorn ollama
 
-# 7. Copy Files
+# 6. Copy Files
 COPY --chown=user . .
 
-# 8. Start Script Permission
+# 7. Start Script Permission
 RUN chmod +x entrypoint.sh
 
-# 9. Ports and Start
+# 8. Ports and Start
 EXPOSE 7860
 CMD ["./entrypoint.sh"]
