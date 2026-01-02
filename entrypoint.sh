@@ -1,18 +1,17 @@
 #!/bin/bash
 
-# Ollama server background में start
-echo "Starting Ollama server in background..."
+# 1. Ollama server ko background mein start karein
 ollama serve &
 
-# थोड़ा wait Ollama ready होने के लिए
-sleep 15
+# 2. Server start hone ka wait karein
+echo "Waiting for Ollama server to start..."
+sleep 5
 
-# Model auto pull (पहली बार, छोटा model रखो stable के लिए)
-if ! ollama list | grep -q "llama3.2:1b"; then
-    echo "Pulling llama3.2:1b model..."
-    ollama pull llama3.2:1b
-fi
+# 3. Model Pull karein 
+# (CPU Free tier ke liye 'tinyllama' best hai. Agar GPU hai to 'llama3' use karein)
+echo "Pulling model..."
+ollama pull tinyllama
 
-# FastAPI को main process बनाओ (foreground)
-echo "Starting FastAPI on port 8000..."
-exec uvicorn app:app --host 0.0.0.0 --port 8000
+# 4. FastAPI Server start karein port 7860 par
+echo "Starting FastAPI..."
+uvicorn main:app --host 0.0.0.0 --port 7860
