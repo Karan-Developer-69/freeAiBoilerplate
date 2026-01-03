@@ -3,52 +3,42 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-# LangChain Imports
+# Imports
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage
-
-# DuckDuckGo New Library Import
 from duckduckgo_search import DDGS
 
 app = FastAPI()
 
-# --- CONFIGURATION ---
-DEFAULT_MODEL = "qwen2.5:3b"
-
-# --- CUSTOM ROBUST SEARCH TOOL ---
-# Hum khud ka tool banayenge jo error aane par crash na ho
+# --- SEARCH TOOL (Fixed) ---
 @tool
 def web_search(query: str) -> str:
-    """Useful for searching the internet for current events, prices, and real-time information."""
+    """Search the internet for current prices, news, and real-time info."""
     try:
+        # 3 Results fetch karenge
         results = DDGS().text(query, max_results=3)
         if results:
-            # Sirf relevant text wapas bhejo
-            return "\n".join([f"- {r['title']}: {r['body']}" for r in results])
-        return "No results found on the internet."
+            return "\n".join([f"Title: {r['title']}\nSnippet: {r['body']}" for r in results])
+        return "No results found."
     except Exception as e:
-        return f"Search failed due to error: {str(e)}"
+        return f"Search Error: {str(e)}"
 
 tools = [web_search]
 
 # --- DATA MODEL ---
 class QueryRequest(BaseModel):
     prompt: str
-    model: str = DEFAULT_MODEL
+    model: str = "qwen2.5:3b"
     enable_web_search: bool = False
     temperature: float = 0.5
-
-@app.get("/")
-def home():
-    return {"status": "Online", "mode": "Fixed Agentic API"}
 
 @app.post("/generate")
 async def generate_response(request: QueryRequest):
     
-    # LLM Setup
+    # 1. LLM Setup
     llm = ChatOllama(
         model=request.model,
         temperature=request.temperature,
@@ -57,50 +47,51 @@ async def generate_response(request: QueryRequest):
 
     async def response_generator():
         try:
-            # === MODE A: AGENTIC SEARCH (INTERNET ON) ===
+            # === SCENARIO A: AGENT MODE (INTERNET) ===
             if request.enable_web_search:
                 
-                # Agent Prompt
+                # Prompt ko simple banaya taaki 'NoneType' error na aaye
                 prompt_template = ChatPromptTemplate.from_messages([
-                    ("system", "You are a helpful assistant. You have access to a web_search tool. "
-                               "Use it ONLY if the user asks for current prices, news, or real-time info. "
-                               "After searching, summarize the answer properly."),
-                    ("placeholder", "{chat_history}"),
+                    ("system", "You are a helpful assistant with access to the internet. "
+                               "Use the 'web_search' tool ONLY if the user asks for real-time information (like prices, news). "
+                               "If the user asks a general question, answer directly. "
+                               "After searching, provide a summary of the results."),
                     ("human", "{input}"),
-                    ("placeholder", "{agent_scratchpad}"),
+                    ("placeholder", "{agent_scratchpad}"), # Zaroori hai tool calling ke liye
                 ])
                 
-                # Agent Create
+                # Agent Construction
                 agent = create_tool_calling_agent(llm, tools, prompt_template)
                 
-                # IMPORTANT: verbose=False rakha hai taki wo 'Serialization Error' na aaye
-                agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
+                # Agent Executor with Error Handling
+                agent_executor = AgentExecutor(
+                    agent=agent, 
+                    tools=tools, 
+                    verbose=True, # Logs on rakho debugging ke liye
+                    handle_parsing_errors=True # <-- YE CRASH ROKEGA
+                )
 
-                # Streaming Response
-                # Hum astream_events use karenge aur sirf 'final answer' filter karenge
+                # Streaming
                 async for event in agent_executor.astream_events(
                     {"input": request.prompt}, version="v1"
                 ):
                     kind = event["event"]
-                    
-                    # Jab Model Final Answer likh raha ho, tabhi user ko dikhao
+                    # Sirf final text user ko bhejo
                     if kind == "on_chat_model_stream":
-                        # Check karte hain ki ye Tool Call ka data toh nahi hai?
                         chunk = event["data"]["chunk"]
                         if chunk.content:
                             yield chunk.content
-            
-            # === MODE B: FAST CODING (DIRECT LLM) ===
+
+            # === SCENARIO B: FAST MODE (DIRECT) ===
             else:
                 messages = [
-                    SystemMessage(content="You are an expert coding assistant. Write clean code."),
+                    SystemMessage(content="You are a coding and logic assistant."),
                     HumanMessage(content=request.prompt)
                 ]
                 async for chunk in llm.astream(messages):
                     yield chunk.content
 
         except Exception as e:
-            # Error user ko dikhe taki debugging ho sake
-            yield f"\n[System Error: {str(e)}]"
+            yield f"\n[Critical Error: {str(e)}]"
 
     return StreamingResponse(response_generator(), media_type="text/plain")
