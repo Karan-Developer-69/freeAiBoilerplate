@@ -17,7 +17,7 @@ WORKDIR $HOME/app
 USER user
 
 # 5. Install Python Libs
-RUN pip install --no-cache-dir fastapi uvicorn ollama
+RUN pip install --no-cache-dir fastapi uvicorn ollama pydantic langchain langchain-community langchain-ollama duckduckgo-search httpx
 
 # 6. Copy Files
 COPY --chown=user . .
