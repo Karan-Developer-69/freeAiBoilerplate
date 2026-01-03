@@ -1,5 +1,5 @@
 #!/bin/bash
-
+pip install -r requirements.txt
 # 1. Ollama Server Start
 ollama serve &
 
