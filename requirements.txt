@@ -1,4 +1,8 @@
 fastapi
 uvicorn
-ollama
+pydantic
+langchain
+langchain-community
+langchain-ollama
+duckduckgo-search
 httpx
