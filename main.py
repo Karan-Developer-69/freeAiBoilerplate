@@ -1,76 +1,58 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel, Field
-from ollama import AsyncClient
-import asyncio # Import asyncio for waiting on non-streaming responses
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+import httpx # Hum direct HTTP request karenge, ollama library slow ho sakti hai
+import json
 
 app = FastAPI()
 
 # --- DATA MODEL ---
 class QueryRequest(BaseModel):
     prompt: str
-    model: str = "deepseek-coder-v2"  # Model set to DeepSeek V2
-    temperature: float = 0.6          # Coding ke liye thoda kam temperature behtar hai
-    max_tokens: int = 4096            # Lambe code ke liye
-    stream: bool = True               # New field: whether to stream or not
+    model: str = "deepseek-coder-v2"
+    temperature: float = 0.6
+    max_tokens: int = 4096
 
-# --- HOME ROUTE ---
 @app.get("/")
 def home():
-    return {"status": "Online", "message": "DeepSeek Coder V2 API is Running Publicly!"}
+    return {"status": "Online", "mode": "Turbo Proxy Mode"}
 
-# --- GENERATION ROUTE (Public) ---
 @app.post("/generate")
 async def generate_text(request: QueryRequest):
-    client = AsyncClient()
-    messages = [
-        {'role': 'system', 'content': 'You are an intelligent coding assistant. Write clean and efficient code.'},
-        {'role': 'user', 'content': request.prompt}
-    ]
+    # Ollama ka local URL (HF spaces me usually yahi hota hai)
+    OLLAMA_API_URL = "http://localhost:11434/api/chat"
+    
+    # Payload tayar karo jo seedha Ollama ko jayega
+    payload = {
+        "model": request.model,
+        "messages": [{'role': 'user', 'content': request.prompt}],
+        "stream": True, # Hamesha stream true rakhenge internal processing ke liye
+        "options": {
+            "temperature": request.temperature,
+            "num_predict": request.max_tokens,
+            # Hack: Context window chota rakhne se speed badhti hai
+            "num_ctx": 2048 
+        }
+    }
 
-    if request.stream:
-        async def stream_generator():
+    async def proxy_generator():
+        timeout = httpx.Timeout(120.0, connect=60.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             try:
-                # Streaming Response
-                async for part in await client.chat(
-                    model=request.model,
-                    messages=messages,
-                    stream=True,
-                    options={
-                        'temperature': request.temperature,
-                        'num_predict': request.max_tokens
-                    }
-                ):
-                    content = part['message']['content']
-                    if content:
-                        yield content
-
+                # Seedha Ollama ke API ko hit karte hain
+                async with client.stream("POST", OLLAMA_API_URL, json=payload) as response:
+                    async for chunk in response.aiter_lines():
+                        if chunk:
+                            # Ollama RAW JSON bhejta hai. 
+                            # Hum usse parse karke sirf text nikal kar bhejenge taaki payload chota ho.
+                            try:
+                                data = json.loads(chunk)
+                                content = data.get("message", {}).get("content", "")
+                                if content:
+                                    yield content
+                            except:
+                                pass
             except Exception as e:
                 yield f"[Error: {str(e)}]"
 
-        return StreamingResponse(stream_generator(), media_type="text/plain")
-    else:
-        # Non-streaming response
-        full_response_content = []
-        try:
-            # The client.chat call for non-streaming still uses stream=True internally
-            # to efficiently get the data from Ollama. We then collect it.
-            async for part in await client.chat(
-                model=request.model,
-                messages=messages,
-                stream=True, # We still stream from Ollama to this server
-                options={
-                    'temperature': request.temperature,
-                    'num_predict': request.max_tokens
-                }
-            ):
-                content = part['message']['content']
-                if content:
-                    full_response_content.append(content)
-
-            # Join all parts to form the complete response
-            final_text = "".join(full_response_content)
-            return JSONResponse(content={"response": final_text})
-
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
+    return StreamingResponse(proxy_generator(), media_type="text/plain")
