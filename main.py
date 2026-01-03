@@ -5,7 +5,10 @@ from pydantic import BaseModel
 from langchain_ollama import ChatOllama
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.agents import create_tool_calling_agent, AgentExecutor
+
+# Kabhi kabhi structure version ke hisab se alag hota hai
+from langchain.agents import AgentExecutor
+from langchain.agents.tool_calling_agent.base import create_tool_calling_agent
 from langchain_core.messages import SystemMessage, HumanMessage
 
 app = FastAPI()
