@@ -2,21 +2,25 @@ import os
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+# --- IMPORTS FIX ---
+try:
+    # Naye versions ke liye
+    from langchain.agents import AgentExecutor, create_tool_calling_agent
+except ImportError:
+    # Agar structure alag hai (Fallback)
+    from langchain.agents import AgentExecutor
+    from langchain.agents.tool_calling_agent.base import create_tool_calling_agent
+
 from langchain_ollama import ChatOllama
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.prompts import ChatPromptTemplate
-
-# Kabhi kabhi structure version ke hisab se alag hota hai
-from langchain.agents import AgentExecutor
-from langchain.agents.tool_calling_agent.base import create_tool_calling_agent
 from langchain_core.messages import SystemMessage, HumanMessage
 
 app = FastAPI()
 
 # --- CONFIGURATION ---
-# "qwen2.5:3b" best balance hai speed aur dimaag ka free tier ke liye.
-# Agar server pe 'ollama pull qwen2.5:3b' nahi kiya hai toh kar lena.
-DEFAULT_MODEL = "qwen2.5:3b" 
+DEFAULT_MODEL = "qwen2.5:3b" # Ensure this model is pulled on the server
 
 # --- TOOLS ---
 search_tool = DuckDuckGoSearchRun()
@@ -26,67 +30,64 @@ tools = [search_tool]
 class QueryRequest(BaseModel):
     prompt: str
     model: str = DEFAULT_MODEL
-    enable_web_search: bool = False # Yahan se tum agent on/off karoge
+    enable_web_search: bool = False
     temperature: float = 0.5
 
 @app.get("/")
 def home():
-    return {"status": "Online", "mode": "LangChain Agentic AI"}
+    return {"status": "Online", "mode": "LangChain Fixed Agent"}
 
 @app.post("/generate")
 async def generate_response(request: QueryRequest):
     
-    # LLM Initialize karo
+    # 1. LLM Initialize (Streaming ON)
     llm = ChatOllama(
         model=request.model,
         temperature=request.temperature,
-        streaming=True # LangChain streaming enable
+        keep_alive="5m"
     )
 
     async def response_generator():
         try:
-            # CASE 1: AGENTIC MODE (SEARCH ON)
+            # === MODE A: AGENTIC SEARCH (INTERNET ON) ===
             if request.enable_web_search:
-                # Agent ko batana padta hai ki wo kya hai
+                
+                # Prompt Template for Agent
                 prompt_template = ChatPromptTemplate.from_messages([
-                    ("system", "You are a helpful AI assistant with web search capabilities. "
-                               "If you need current information, use the search tool. "
-                               "If the user asks for code, just write the code. "
-                               "Always provide the final answer clearly."),
+                    ("system", "You are a helpful assistant. Use the search tool if the user asks for current information. If not needed, answer directly."),
                     ("placeholder", "{chat_history}"),
                     ("human", "{input}"),
                     ("placeholder", "{agent_scratchpad}"),
                 ])
                 
-                # Agent create karo
+                # Agent Construction
                 agent = create_tool_calling_agent(llm, tools, prompt_template)
-                agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
+                agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
 
-                # Agent ko run karo aur stream karo
-                # Note: Agent streaming thoda complex hota hai, hum chunks filter karenge
+                # Streaming the Agent's Final Answer
+                # 'astream_events' is best for getting tokens in real-time
                 async for event in agent_executor.astream_events(
                     {"input": request.prompt}, version="v1"
                 ):
                     kind = event["event"]
-                    
-                    # Sirf final answer (on_chat_model_stream) user ko bhejo
-                    # Taki user ko "Thinking..." wale steps na dikhein (clean output)
+                    # Hum sirf final LLM generation wala text user ko bhejenge
                     if kind == "on_chat_model_stream":
+                        # Check agar ye tool call nahi hai, balki final answer hai
                         content = event["data"]["chunk"].content
                         if content:
                             yield content
-                    
-            # CASE 2: FAST MODE (DIRECT LLM)
+            
+            # === MODE B: FAST CODING (DIRECT LLM) ===
             else:
-                # Simple LLM Call - Super Fast
                 messages = [
                     SystemMessage(content="You are an expert coding assistant."),
                     HumanMessage(content=request.prompt)
                 ]
+                # Direct streaming from LLM is much faster
                 async for chunk in llm.astream(messages):
                     yield chunk.content
 
         except Exception as e:
-            yield f"\n[System Error: {str(e)}]"
+            yield f"\n[Server Error: {str(e)}]"
 
     return StreamingResponse(response_generator(), media_type="text/plain")
