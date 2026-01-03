@@ -3,28 +3,36 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-# --- IMPORTS FIX ---
-try:
-    # Naye versions ke liye
-    from langchain.agents import AgentExecutor, create_tool_calling_agent
-except ImportError:
-    # Agar structure alag hai (Fallback)
-    from langchain.agents import AgentExecutor
-    from langchain.agents.tool_calling_agent.base import create_tool_calling_agent
-
+# LangChain Imports
 from langchain_ollama import ChatOllama
-from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.prompts import ChatPromptTemplate
+from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage
+
+# DuckDuckGo New Library Import
+from duckduckgo_search import DDGS
 
 app = FastAPI()
 
 # --- CONFIGURATION ---
-DEFAULT_MODEL = "qwen2.5:3b" # Ensure this model is pulled on the server
+DEFAULT_MODEL = "qwen2.5:3b"
 
-# --- TOOLS ---
-search_tool = DuckDuckGoSearchRun()
-tools = [search_tool]
+# --- CUSTOM ROBUST SEARCH TOOL ---
+# Hum khud ka tool banayenge jo error aane par crash na ho
+@tool
+def web_search(query: str) -> str:
+    """Useful for searching the internet for current events, prices, and real-time information."""
+    try:
+        results = DDGS().text(query, max_results=3)
+        if results:
+            # Sirf relevant text wapas bhejo
+            return "\n".join([f"- {r['title']}: {r['body']}" for r in results])
+        return "No results found on the internet."
+    except Exception as e:
+        return f"Search failed due to error: {str(e)}"
+
+tools = [web_search]
 
 # --- DATA MODEL ---
 class QueryRequest(BaseModel):
@@ -35,12 +43,12 @@ class QueryRequest(BaseModel):
 
 @app.get("/")
 def home():
-    return {"status": "Online", "mode": "LangChain Fixed Agent"}
+    return {"status": "Online", "mode": "Fixed Agentic API"}
 
 @app.post("/generate")
 async def generate_response(request: QueryRequest):
     
-    # 1. LLM Initialize (Streaming ON)
+    # LLM Setup
     llm = ChatOllama(
         model=request.model,
         temperature=request.temperature,
@@ -52,42 +60,47 @@ async def generate_response(request: QueryRequest):
             # === MODE A: AGENTIC SEARCH (INTERNET ON) ===
             if request.enable_web_search:
                 
-                # Prompt Template for Agent
+                # Agent Prompt
                 prompt_template = ChatPromptTemplate.from_messages([
-                    ("system", "You are a helpful assistant. Use the search tool if the user asks for current information. If not needed, answer directly."),
+                    ("system", "You are a helpful assistant. You have access to a web_search tool. "
+                               "Use it ONLY if the user asks for current prices, news, or real-time info. "
+                               "After searching, summarize the answer properly."),
                     ("placeholder", "{chat_history}"),
                     ("human", "{input}"),
                     ("placeholder", "{agent_scratchpad}"),
                 ])
                 
-                # Agent Construction
+                # Agent Create
                 agent = create_tool_calling_agent(llm, tools, prompt_template)
-                agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+                
+                # IMPORTANT: verbose=False rakha hai taki wo 'Serialization Error' na aaye
+                agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
 
-                # Streaming the Agent's Final Answer
-                # 'astream_events' is best for getting tokens in real-time
+                # Streaming Response
+                # Hum astream_events use karenge aur sirf 'final answer' filter karenge
                 async for event in agent_executor.astream_events(
                     {"input": request.prompt}, version="v1"
                 ):
                     kind = event["event"]
-                    # Hum sirf final LLM generation wala text user ko bhejenge
+                    
+                    # Jab Model Final Answer likh raha ho, tabhi user ko dikhao
                     if kind == "on_chat_model_stream":
-                        # Check agar ye tool call nahi hai, balki final answer hai
-                        content = event["data"]["chunk"].content
-                        if content:
-                            yield content
+                        # Check karte hain ki ye Tool Call ka data toh nahi hai?
+                        chunk = event["data"]["chunk"]
+                        if chunk.content:
+                            yield chunk.content
             
             # === MODE B: FAST CODING (DIRECT LLM) ===
             else:
                 messages = [
-                    SystemMessage(content="You are an expert coding assistant."),
+                    SystemMessage(content="You are an expert coding assistant. Write clean code."),
                     HumanMessage(content=request.prompt)
                 ]
-                # Direct streaming from LLM is much faster
                 async for chunk in llm.astream(messages):
                     yield chunk.content
 
         except Exception as e:
-            yield f"\n[Server Error: {str(e)}]"
+            # Error user ko dikhe taki debugging ho sake
+            yield f"\n[System Error: {str(e)}]"
 
     return StreamingResponse(response_generator(), media_type="text/plain")
