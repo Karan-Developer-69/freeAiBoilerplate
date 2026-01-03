@@ -55,63 +55,63 @@ class QueryRequest(BaseModel):
     temperature: float = Field(default=0.5, ge=0.0, le=2.0)
     max_tokens: int = Field(default=2048, ge=100, le=8192)
 
+# main.py - FIXED AGENT STREAMING (LangChain 0.3.0 Compatible)
+# Replace ONLY the generate_response function in your server code
+
 @app.post("/generate", response_class=StreamingResponse)
 async def generate_response(request: QueryRequest) -> StreamingResponse:
-    """Generate streaming response with optional agent tools."""
+    """Fixed streaming with proper agent compatibility."""
     
-    # LLM with connection pooling & timeout
     llm = ChatOllama(
         model=request.model,
         temperature=request.temperature,
-        timeout=60.0,  # 60s timeout
-        keep_alive="10m"  # Longer for production
+        timeout=60.0,
+        keep_alive="10m"
     )
 
     async def stream_content() -> AsyncIterable[str]:
         try:
             if request.enable_web_search:
-                # AGENT MODE: Tool calling with error recovery
+                # FIXED PROMPT (v2 - LangChain 0.3+ compatible)
                 prompt = ChatPromptTemplate.from_messages([
-                    ("system", """You are a helpful AI assistant with internet access. 
-Use web_search ONLY for real-time data (news, prices, events). 
-Answer general questions directly. Summarize search results concisely."""),
+                    ("system", """You are a helpful assistant with web search. 
+Use tools only for real-time info. Summarize results concisely.
+Final answer format: Clear, direct response."""),
                     ("human", "{input}"),
-                    MessagesPlaceholder(variable_name="agent_scratchpad")
+                    MessagesPlaceholder("agent_scratchpad"),
                 ])
                 
                 agent = create_tool_calling_agent(llm, tools, prompt)
                 executor = AgentExecutor(
                     agent=agent,
                     tools=tools,
-                    verbose=False,  # Disable for prod; set True for debug
+                    verbose=False,
                     handle_parsing_errors=True,
-                    max_iterations=5,  # Prevent loops
-                    max_execution_time=120.0  # 2min limit
+                    max_iterations=6,
+                    early_stopping_method="generate"
                 )
                 
-                # Stream agent events
-                async for chunk in executor.astream(request.prompt, stream_mode="values"):
-                    if "output" in chunk:
+                # FIXED STREAMING - No 'stream_mode' param
+                async for chunk in executor.astream(request.prompt):
+                    if "output" in chunk and chunk["output"]:
                         yield chunk["output"]
             
             else:
-                # DIRECT MODE: Simple chat
+                # DIRECT CHAT (unchanged)
                 messages = [
-                    ("system", "You are a helpful coding and logic assistant. Be concise and accurate."),
+                    ("system", "You are a helpful coding assistant."),
                     ("human", request.prompt)
                 ]
                 async for chunk in llm.astream(messages):
-                    if chunk.content:
+                    if hasattr(chunk, 'content') and chunk.content:
                         yield chunk.content
 
         except Exception as e:
-            yield f"Error: {str(e)}. Try again or disable web search."
+            error_msg = f"Server Error: {str(e)[:100]}"
+            yield error_msg
 
-    return StreamingResponse(
-        stream_content(), 
-        media_type="text/plain",
-        headers={"X-FastAPI-Version": "2.0"}
-    )
+    return StreamingResponse(stream_content(), media_type="text/plain")
+
 
 @app.get("/health")
 async def health_check():
