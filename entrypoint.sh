@@ -8,8 +8,8 @@ sleep 5
 
 # 2. DeepSeek Model Pull
 # Note: Ye model bada hai, download hone mein 2-3 minute lag sakte hain
-echo "Pulling DeepSeek Coder V2..."
-ollama pull deepseek-coder-v2
+echo "Pulling qwen2.5:3b..."
+ollama pull qwen2.5:3b
 
 # 3. FastAPI Start
 echo "Starting Public API..."
