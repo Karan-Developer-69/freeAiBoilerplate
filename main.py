@@ -1,58 +1,89 @@
+import os
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-import httpx # Hum direct HTTP request karenge, ollama library slow ho sakti hai
-import json
+from langchain_ollama import ChatOllama
+from langchain_community.tools import DuckDuckGoSearchRun
+from langchain_core.prompts import ChatPromptTemplate
+from langchain.agents import create_tool_calling_agent, AgentExecutor
+from langchain_core.messages import SystemMessage, HumanMessage
 
 app = FastAPI()
+
+# --- CONFIGURATION ---
+# "qwen2.5:3b" best balance hai speed aur dimaag ka free tier ke liye.
+# Agar server pe 'ollama pull qwen2.5:3b' nahi kiya hai toh kar lena.
+DEFAULT_MODEL = "qwen2.5:3b" 
+
+# --- TOOLS ---
+search_tool = DuckDuckGoSearchRun()
+tools = [search_tool]
 
 # --- DATA MODEL ---
 class QueryRequest(BaseModel):
     prompt: str
-    model: str = "deepseek-coder-v2"
-    temperature: float = 0.6
-    max_tokens: int = 4096
+    model: str = DEFAULT_MODEL
+    enable_web_search: bool = False # Yahan se tum agent on/off karoge
+    temperature: float = 0.5
 
 @app.get("/")
 def home():
-    return {"status": "Online", "mode": "Turbo Proxy Mode"}
+    return {"status": "Online", "mode": "LangChain Agentic AI"}
 
 @app.post("/generate")
-async def generate_text(request: QueryRequest):
-    # Ollama ka local URL (HF spaces me usually yahi hota hai)
-    OLLAMA_API_URL = "http://localhost:11434/api/chat"
+async def generate_response(request: QueryRequest):
     
-    # Payload tayar karo jo seedha Ollama ko jayega
-    payload = {
-        "model": request.model,
-        "messages": [{'role': 'user', 'content': request.prompt}],
-        "stream": True, # Hamesha stream true rakhenge internal processing ke liye
-        "options": {
-            "temperature": request.temperature,
-            "num_predict": request.max_tokens,
-            # Hack: Context window chota rakhne se speed badhti hai
-            "num_ctx": 2048 
-        }
-    }
+    # LLM Initialize karo
+    llm = ChatOllama(
+        model=request.model,
+        temperature=request.temperature,
+        streaming=True # LangChain streaming enable
+    )
 
-    async def proxy_generator():
-        timeout = httpx.Timeout(120.0, connect=60.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            try:
-                # Seedha Ollama ke API ko hit karte hain
-                async with client.stream("POST", OLLAMA_API_URL, json=payload) as response:
-                    async for chunk in response.aiter_lines():
-                        if chunk:
-                            # Ollama RAW JSON bhejta hai. 
-                            # Hum usse parse karke sirf text nikal kar bhejenge taaki payload chota ho.
-                            try:
-                                data = json.loads(chunk)
-                                content = data.get("message", {}).get("content", "")
-                                if content:
-                                    yield content
-                            except:
-                                pass
-            except Exception as e:
-                yield f"[Error: {str(e)}]"
+    async def response_generator():
+        try:
+            # CASE 1: AGENTIC MODE (SEARCH ON)
+            if request.enable_web_search:
+                # Agent ko batana padta hai ki wo kya hai
+                prompt_template = ChatPromptTemplate.from_messages([
+                    ("system", "You are a helpful AI assistant with web search capabilities. "
+                               "If you need current information, use the search tool. "
+                               "If the user asks for code, just write the code. "
+                               "Always provide the final answer clearly."),
+                    ("placeholder", "{chat_history}"),
+                    ("human", "{input}"),
+                    ("placeholder", "{agent_scratchpad}"),
+                ])
+                
+                # Agent create karo
+                agent = create_tool_calling_agent(llm, tools, prompt_template)
+                agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
 
-    return StreamingResponse(proxy_generator(), media_type="text/plain")
+                # Agent ko run karo aur stream karo
+                # Note: Agent streaming thoda complex hota hai, hum chunks filter karenge
+                async for event in agent_executor.astream_events(
+                    {"input": request.prompt}, version="v1"
+                ):
+                    kind = event["event"]
+                    
+                    # Sirf final answer (on_chat_model_stream) user ko bhejo
+                    # Taki user ko "Thinking..." wale steps na dikhein (clean output)
+                    if kind == "on_chat_model_stream":
+                        content = event["data"]["chunk"].content
+                        if content:
+                            yield content
+                    
+            # CASE 2: FAST MODE (DIRECT LLM)
+            else:
+                # Simple LLM Call - Super Fast
+                messages = [
+                    SystemMessage(content="You are an expert coding assistant."),
+                    HumanMessage(content=request.prompt)
+                ]
+                async for chunk in llm.astream(messages):
+                    yield chunk.content
+
+        except Exception as e:
+            yield f"\n[System Error: {str(e)}]"
+
+    return StreamingResponse(response_generator(), media_type="text/plain")
