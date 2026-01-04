@@ -32,7 +32,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("GenAI-Agent")
 
 # Model: Use a smart model suitable for tool calling (qwen2.5 or llama3.1)
-MODEL_NAME = "qwen2.5:7b" 
+MODEL_NAME = "qwen2.5:3b" 
 BASE_URL = "http://localhost:11434"
 
 # Global HTTP Client
