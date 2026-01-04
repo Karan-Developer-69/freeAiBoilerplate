@@ -1,267 +1,218 @@
 import os
-import datetime
-from typing import AsyncIterable
+import re
+import logging
+import asyncio
+from typing import Annotated, Literal, TypedDict, List
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Body
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-import requests
-from duckduckgo_search import DDGS
+# --- Async & Network ---
+import httpx
+from duckduckgo_search import AsyncDDGS
+from bs4 import BeautifulSoup
 
+# --- LangChain / AI Core ---
 from langchain_ollama import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, AIMessage
 from langchain_core.tools import tool
+from langchain_core.prompts import ChatPromptTemplate
+
+# --- LangGraph (The Brain) ---
+from langgraph.graph import StateGraph, END, START
+from langgraph.prebuilt import ToolNode
+from langgraph.checkpoint.memory import MemorySaver # In-memory DB for context
 
 # --------------------------------------------------------------------------------------
-# FastAPI app
+# 1. Configuration & Global State
 # --------------------------------------------------------------------------------------
-app = FastAPI(
-    title="FreeAI Multi-Tool Server",
-    description="LLM + Web Search + Weather + Time utilities with streaming",
-    version="1.0.0",
-)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("GenAI-Agent")
+
+# Model Configuration (Use a smart model like qwen2.5 or llama3.1)
+MODEL_NAME = "qwen2.5:7b" 
+BASE_URL = "http://localhost:11434"
+
+# HTTP Client for Scraping
+http_client = httpx.AsyncClient(timeout=15.0, follow_redirects=True)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await http_client.aclose()
+
+app = FastAPI(title="Advanced GenAI Agent", version="2.0", lifespan=lifespan)
 
 # --------------------------------------------------------------------------------------
-# TOOLS
+# 2. Advanced Tools (Search + Scrape)
 # --------------------------------------------------------------------------------------
 
 @tool
-def web_search(query: str) -> str:
-    """Search the internet for latest info and return list-style results."""
+async def web_search(query: str) -> str:
+    """
+    Search the web for latest information, technical docs, or news.
+    Returns top 5 results with snippets and URLs.
+    """
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=5))
+        results = await AsyncDDGS().text(query, max_results=5)
         if not results:
-            return "No relevant results found."
-        lines = []
-        for i, r in enumerate(results, start=1):
-            title = (r.get("title") or "").strip()
-            href = (r.get("href") or "").strip()
-            body = (r.get("body") or "").strip()[:300]
-            lines.append(
-                f"{i}. Title: {title}\n"
-                f"   URL: {href}\n"
-                f"   Snippet: {body}..."
-            )
-        return "\n\n".join(lines)
+            return "No results found on the web."
+        
+        # Format cleanly
+        output = []
+        for r in results:
+            output.append(f"Title: {r['title']}\nLink: {r['href']}\nSnippet: {r['body']}\n---")
+        return "\n".join(output)
     except Exception as e:
-        return f"Search failed: {str(e)}"
-
-
-@tool
-def get_india_time(_: str = "") -> str:
-    """Return current date and time in India (IST)."""
-    # IST = UTC + 5:30
-    ist_offset = datetime.timedelta(hours=5, minutes=30)
-    ist_tz = datetime.timezone(ist_offset)
-    now_ist = datetime.datetime.now(tz=ist_tz)
-    date_str = now_ist.strftime("%Y-%m-%d")
-    time_str = now_ist.strftime("%H:%M:%S")
-    return f"Date: {date_str}, Time: {time_str} IST"
-
+        return f"Search Error: {str(e)}"
 
 @tool
-def get_weather(city: str) -> str:
-    """Get current weather for a city using OpenWeatherMap (metric, °C)."""
-    api_key = os.getenv("OPENWEATHER_API_KEY", "")
-    if not api_key:
-        return "Weather API key not configured on server."
-
+async def read_webpage(url: str) -> str:
+    """
+    Reads the full content of a specific URL. 
+    Use this if the search snippet is not enough and you need deep technical details.
+    """
     try:
-        params = {
-            "q": city,
-            "appid": api_key,
-            "units": "metric",
-        }
-        resp = requests.get(
-            "https://api.openweathermap.org/data/2.5/weather",
-            params=params,
-            timeout=10,
-        )
+        resp = await http_client.get(url)
         if resp.status_code != 200:
-            return f"Weather API error: {resp.text}"
-
-        data = resp.json()
-        name = data.get("name", city)
-        weather = data.get("weather", [{}])[0]
-        main = data.get("main", {})
-
-        desc = weather.get("description", "N/A")
-        temp = main.get("temp", "N/A")
-        feels_like = main.get("feels_like", "N/A")
-        humidity = main.get("humidity", "N/A")
-
-        return (
-            f"City: {name}\n"
-            f"Condition: {desc}\n"
-            f"Temperature: {temp}°C (feels like {feels_like}°C)\n"
-            f"Humidity: {humidity}%"
-        )
+            return f"Failed to load page: Status {resp.status_code}"
+        
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        # Remove scripts and styles
+        for script in soup(["script", "style", "nav", "footer"]):
+            script.extract()
+        
+        text = soup.get_text(separator="\n")
+        # Clean up whitespace
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        clean_text = '\n'.join(chunk for chunk in chunks if chunk)
+        
+        return clean_text[:4000] + "...(truncated)" # Limit length for LLM context
     except Exception as e:
-        return f"Weather fetch failed: {str(e)}"
+        return f"Scraping Error: {str(e)}"
 
-
-TOOLS = [web_search, get_india_time, get_weather]
+tools = [web_search, read_webpage]
 
 # --------------------------------------------------------------------------------------
-# Request model
+# 3. LangGraph Agent Architecture (Reasoning Engine)
 # --------------------------------------------------------------------------------------
 
-class QueryRequest(BaseModel):
-    prompt: str = Field(..., min_length=1, max_length=4000)
-    model: str = Field(default="qwen2.5:3b", max_length=50)
-    enable_web_search: bool = Field(
-        default=False,
-        description="If true, use web_search + tools before answering.",
+# Define State
+class AgentState(TypedDict):
+    messages: Annotated[List[BaseMessage], "add_messages"]
+
+# Initialize LLM with Tools
+llm = ChatOllama(
+    model=MODEL_NAME,
+    base_url=BASE_URL,
+    temperature=0.4, # Balanced for creativity and accuracy
+    keep_alive="1h"
+).bind_tools(tools)
+
+# System Prompt - The Persona & Formatting Rules
+SYSTEM_PROMPT = """You are an advanced GenAI technical assistant. 
+
+CORE RULES:
+1. **Latest Info:** Always use 'web_search' for current events or tech libraries. Do not guess.
+2. **Thinking:** Before answering, explain your plan briefly.
+3. **Deep Dive:** If a search result looks promising but incomplete, use 'read_webpage' to get full code/docs.
+4. **Code Formatting:** 
+   - NEVER use markdown triple backticks (```). 
+   - ALWAYS use this XML format for code:
+     <code lang="python">
+     print("Hello World")
+     </code>
+5. **Context:** If the user asks to "continue" or "more", look at the previous conversation history.
+
+If the answer is long, structure it with headers and bullet points.
+"""
+
+# Node: Agent (Decides what to do)
+async def agent_node(state: AgentState):
+    messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
+    response = await llm.ainvoke(messages)
+    return {"messages": [response]}
+
+# Build Graph
+workflow = StateGraph(AgentState)
+workflow.add_node("agent", agent_node)
+workflow.add_node("tools", ToolNode(tools))
+
+workflow.add_edge(START, "agent")
+workflow.add_conditional_edges(
+    "agent",
+    lambda state: "tools" if state["messages"][-1].tool_calls else END
+)
+workflow.add_edge("tools", "agent") # Loop back to agent after tool usage
+
+# Memory (Checkpointer) - Saves state per thread_id
+memory = MemorySaver()
+app_graph = workflow.compile(checkpointer=memory)
+
+# --------------------------------------------------------------------------------------
+# 4. Request Handling & Streaming
+# --------------------------------------------------------------------------------------
+
+class ChatRequest(BaseModel):
+    query: str
+    thread_id: str = Field(..., description="Unique ID for conversation history (e.g., 'user-123')")
+
+def format_chunk(content: str) -> str:
+    """Helper to ensure live streaming looks good"""
+    # Real-time regex replacement could be risky, better to rely on system prompt,
+    # but we can do simple cleanups here if needed.
+    return content
+
+async def event_generator(query: str, thread_id: str):
+    config = {"configurable": {"thread_id": thread_id}}
+    
+    # User message input
+    inputs = {"messages": [HumanMessage(content=query)]}
+    
+    try:
+        # Stream events from the graph
+        async for event in app_graph.astream_events(inputs, config=config, version="v1"):
+            event_type = event["event"]
+            
+            # 1. Agent is Thinking (Streaming the token output)
+            if event_type == "on_chat_model_stream":
+                chunk = event["data"]["chunk"].content
+                if chunk:
+                    yield chunk
+
+            # 2. Tool Start (Reasoning visible)
+            elif event_type == "on_tool_start":
+                tool_name = event['name']
+                tool_args = event['data'].get('input')
+                yield f"\n\n🤔 **Thinking:** I need to use `{tool_name}` to find info about: `{str(tool_args)}`...\n\n"
+
+            # 3. Tool End (Observation)
+            elif event_type == "on_tool_end":
+                output = event['data'].get('output')
+                snippet = str(output)[:100].replace('\n', ' ')
+                yield f"✅ **Found Data:** {snippet}...\n\n"
+
+    except Exception as e:
+        yield f"\n❌ **Error:** {str(e)}"
+
+@app.post("/chat")
+async def chat_endpoint(req: ChatRequest):
+    return StreamingResponse(
+        event_generator(req.query, req.thread_id),
+        media_type="text/plain"
     )
-    temperature: float = Field(default=0.5, ge=0.0, le=2.0)
-    power_mode: bool = Field(
-        default=False,
-        description="If true, give deeper multi-level list answers.",
-    )
-
-
-# --------------------------------------------------------------------------------------
-# Small helper: detect dev queries
-# --------------------------------------------------------------------------------------
-
-DEV_KEYWORDS = [
-    "code", "bug", "error", "traceback",
-    "fastapi", "nextjs", "next.js", "react",
-    "python", "typescript", "stack trace",
-]
-
-
-def is_dev_query(text: str) -> bool:
-    low = text.lower()
-    return any(k in low for k in DEV_KEYWORDS)
-
-
-# --------------------------------------------------------------------------------------
-# Core endpoint with streaming
-# --------------------------------------------------------------------------------------
-
-@app.post("/generate")
-async def generate_response(request: QueryRequest):
-    llm = ChatOllama(
-        model=request.model,
-        temperature=request.temperature,
-        keep_alive="10m",
-        timeout=60.0,
-    )
-
-    async def streamer() -> AsyncIterable[str]:
-        try:
-            # --------------------------------------------------
-            # MODE 1: No web search → pure chat with dev/normal mode
-            # --------------------------------------------------
-            if not request.enable_web_search:
-                dev_mode = is_dev_query(request.prompt)
-                if dev_mode:
-                    system_msg = (
-                        "You are a senior full-stack engineer. "
-                        "Always give clean code blocks, stepwise reasoning, and avoid unnecessary text."
-                    )
-                else:
-                    system_msg = (
-                        "You are a helpful assistant. "
-                        "Be concise and clear. Prefer bullet lists for multiple points."
-                    )
-
-                messages = [
-                    ("system", system_msg),
-                    ("human", request.prompt),
-                ]
-                async for chunk in llm.astream(messages):
-                    if getattr(chunk, "content", None):
-                        yield chunk.content
-                return
-
-            # --------------------------------------------------
-            # MODE 2: Web / tools powered answer
-            #  - Tool calls run server-side (fast)
-            #  - LLM then reasons + formats for user
-            # --------------------------------------------------
-            user_q = request.prompt.lower()
-
-            # Auto tool selection hints for system prompt
-            use_time = any(w in user_q for w in ["time", "date", "india time", "ist"])
-            use_weather = "weather" in user_q or "temperature" in user_q or "mausam" in user_q
-
-            tool_info = []
-            if use_time:
-                tool_info.append("get_india_time")
-            if use_weather:
-                # naive: try to extract city name from end of question if any
-                # user can also just say: 'weather in Mumbai'
-                city_guess = request.prompt.replace("weather", "").strip()
-                if not city_guess:
-                    city_guess = "Mumbai"
-                weather_text = get_weather.invoke(city_guess)
-                tool_info.append(f"get_weather(city='{city_guess}') -> {weather_text}")
-
-            # Always run web_search as a general context provider
-            search_results = web_search.invoke(request.prompt)
-
-            if request.power_mode:
-                system_text = (
-                    "You are an expert research assistant with access to some tools.\n"
-                    "- Use the web search results and tool outputs given below as primary facts.\n"
-                    "- Always answer in clear bullet or numbered lists when there are multiple items.\n"
-                    "- Group related items and keep explanations short but precise.\n"
-                )
-            else:
-                system_text = (
-                    "You are a concise assistant.\n"
-                    "- Use the web search results and tools outputs below.\n"
-                    "- Keep the answer short, focusing on key points.\n"
-                )
-
-            tools_context = ""
-            if tool_info:
-                tools_context = "\n\nTool outputs:\n" + "\n".join(f"- {t}" for t in tool_info)
-
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", system_text),
-                (
-                    "human",
-                    "User question: {question}\n\n"
-                    "Web search results:\n{results}"
-                    "{tools_ctx}"
-                ),
-            ])
-
-            chain = prompt | llm
-            input_data = {
-                "question": request.prompt,
-                "results": search_results,
-                "tools_ctx": tools_context,
-            }
-
-            async for chunk in chain.astream(input_data):
-                if getattr(chunk, "content", None):
-                    yield chunk.content
-
-        except Exception as e:
-            yield f"Server Error: {str(e)}"
-
-    return StreamingResponse(streamer(), media_type="text/plain")
-
-
-# --------------------------------------------------------------------------------------
-# Simple health check
-# --------------------------------------------------------------------------------------
 
 @app.get("/health")
-async def health():
-    return {"status": "ok", "model": "ollama", "tools": ["web_search", "get_india_time", "get_weather"]}
-
+def health():
+    return {"status": "GenAI Agent Ready", "model": MODEL_NAME}
 
 # --------------------------------------------------------------------------------------
-# Local run
+# Run Server
 # --------------------------------------------------------------------------------------
-
 if __name__ == "__main__":
     import uvicorn
+    # Use proper host for network access
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
