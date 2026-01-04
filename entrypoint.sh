@@ -6,7 +6,7 @@ ollama serve &
 echo "Waiting for Ollama server..."
 sleep 5
 
-# 2. DeepSeek Model Pull
+# 2. Qwen Model Pull
 # Note: Ye model bada hai, download hone mein 2-3 minute lag sakte hain
 echo "Pulling qwen2.5:3b..."
 ollama pull qwen2.5:3b
